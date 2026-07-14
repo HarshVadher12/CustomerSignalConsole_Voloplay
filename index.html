@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Customer Signal Console</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js" crossorigin="anonymous"></script>
+<style>
+  body { margin: 0; background: #0B0F14; color: #E8EDF2; font-family: sans-serif; }
+  #root:empty::before {
+    content: "Loading Customer Signal Console… if this message doesn't go away within a few seconds, one of the required scripts failed to load — check your browser console (F12) for a red error, or try a different network.";
+    display: block; padding: 40px; font-size: 14px; color: #8B97A6; max-width: 560px; line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="fatal-error" style="display:none; padding:40px; font-family:monospace; font-size:13px; color:#E8A33D; white-space:pre-wrap; max-width:640px;"></div>
+
+<script>
+  // Surface any load/runtime failure directly on the page instead of a silent blank screen.
+  window.addEventListener("error", function (e) {
+    var el = document.getElementById("fatal-error");
+    if (!el) return;
+    el.style.display = "block";
+    el.textContent += "Error: " + (e.message || e.error) + (e.filename ? "\n  at " + e.filename + ":" + e.lineno : "") + "\n\n";
+  });
+</script>
+
+<script type="text/babel" data-presets="react">
+// ═══════════════════════════════════════════════════════════════════════
+//  PASTE YOUR GROQ API KEY BELOW (between the quotes), then save.
+//  Get one at: https://console.groq.com/keys
+// ═══════════════════════════════════════════════════════════════════════
+const GROQ_API_KEY = "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";
+const GROQ_MODEL = "llama-3.3-70b-versatile"; // change here if you'd rather use a different Groq model
+// ═══════════════════════════════════════════════════════════════════════
+
+const { useState, useEffect, useMemo } = React;
+
+// ---------------------------------------------------------------------------
+// Dummy data — three accounts, three distinct situations, five source systems
+// ---------------------------------------------------------------------------
+const ACCOUNTS = [
+  {
+    id: "meridian", name: "Meridian Freight Co", industry: "Logistics",
+    arr: 84000, seats: 62, activeUsers: 31, owner: "Priya Nathan",
+    stage: "Renewal — At Risk", renewalDate: "2026-08-04", lastContact: "2026-07-02",
+    dealNotes: "Champion (Ops Director) went quiet after Q2 budget review. Finance flagged card decline rate as a concern in last QBR.",
+    loginTrend: [42,40,39,35,33,30,28,29,26,24,22,21,19,18],
+    tickets: [
+      { id: "T-4471", subject: "Card declines on bulk fuel purchases", severity: "High", status: "Open", opened: "2026-07-09" },
+      { id: "T-4438", subject: "Reimbursement approval chain broken for regional managers", severity: "High", status: "Open", opened: "2026-06-28" },
+      { id: "T-4390", subject: "Export to NetSuite missing cost centers", severity: "Medium", status: "Resolved", opened: "2026-06-11" }
+    ],
+    slack: [
+      { channel: "#cs-key-accounts", author: "R. Fernandes (CS)", time: "2026-07-11", message: "Meridian's ops lead didn't join the last two syncs. Getting radio silence on the card decline ticket too." },
+      { channel: "#renewals", author: "P. Nathan (Sales)", time: "2026-07-08", message: "Meridian renewal is Aug 4. Not hearing urgency from their side — need to get in front of finance before it lapses quietly." }
+    ],
+    emails: [
+      { subject: "Re: Card decline investigation", snippet: "This is the third time this month. We're starting to route fuel spend back to the old corporate card.", sentiment: "Negative", date: "2026-07-10" },
+      { subject: "Q2 QBR follow-up", snippet: "Appreciate the summary. We need to see the decline issue resolved before we can commit to renewal terms.", sentiment: "Neutral", date: "2026-07-03" }
+    ],
+    usage: { featureAdoption: { cards: 71, expense: 54, reimbursement: 22 }, lastLogin: "2026-07-13" }
+  },
+  {
+    id: "solstice", name: "Solstice Retail Group", industry: "Retail (multi-brand)",
+    arr: 46000, seats: 28, activeUsers: 27, owner: "Devon Aiyer",
+    stage: "Active — Expansion Signal", renewalDate: "2027-01-19", lastContact: "2026-07-12",
+    dealNotes: "Asked twice about multi-entity support ahead of acquiring two new store brands. Currently on single-entity plan.",
+    loginTrend: [18,19,20,22,21,23,24,26,27,27,28,29,30,31],
+    tickets: [
+      { id: "T-4502", subject: "How to set spend limits per store location", severity: "Low", status: "Resolved", opened: "2026-07-06" }
+    ],
+    slack: [
+      { channel: "#cs-key-accounts", author: "D. Aiyer (CS)", time: "2026-07-12", message: "Solstice CFO asked point-blank if we support multi-entity consolidation — they're closing 2 acquisitions in Q3. This is a real expansion play." },
+      { channel: "#product-feedback", author: "D. Aiyer (CS)", time: "2026-07-05", message: "Solstice team is using expense categorization way more than average for their size. Power users on the finance side." }
+    ],
+    emails: [
+      { subject: "Multi-entity roadmap question", snippet: "We're acquiring two regional chains this quarter and want to run them under one consolidated view. Is this on your roadmap?", sentiment: "Positive", date: "2026-07-12" },
+      { subject: "Great quarter with Volopay", snippet: "Onboarding the new finance hire was painless this time — noticeably smoother than our first rollout.", sentiment: "Positive", date: "2026-06-20" }
+    ],
+    usage: { featureAdoption: { cards: 88, expense: 91, reimbursement: 65 }, lastLogin: "2026-07-14" }
+  },
+  {
+    id: "kestrel", name: "Kestrel Manufacturing", industry: "Industrial Manufacturing",
+    arr: 120000, seats: 95, activeUsers: 74, owner: "Sana Iqbal",
+    stage: "Active — Stable", renewalDate: "2027-04-30", lastContact: "2026-06-25",
+    dealNotes: "Long-tenured account, consistent usage. Procurement mentioned a routine vendor-comparison exercise in passing.",
+    loginTrend: [70,72,71,73,75,74,73,76,74,75,74,73,74,74],
+    tickets: [
+      { id: "T-4319", subject: "Bulk user import for new plant onboarding", severity: "Low", status: "Resolved", opened: "2026-06-14" }
+    ],
+    slack: [
+      { channel: "#cs-key-accounts", author: "S. Iqbal (CS)", time: "2026-06-25", message: "Kestrel procurement mentioned they're 'benchmarking vendors' this cycle — sounded routine, but worth a friendly check-in before renewal season." }
+    ],
+    emails: [
+      { subject: "New plant onboarding — user import", snippet: "Import went smoothly, all 40 new users are active. Thanks for the quick turnaround.", sentiment: "Positive", date: "2026-06-16" }
+    ],
+    usage: { featureAdoption: { cards: 80, expense: 77, reimbursement: 58 }, lastLogin: "2026-07-14" }
+  }
+];
+
+function deriveSignals(acc) {
+  const trend = acc.loginTrend;
+  const trendDelta = ((trend[trend.length - 1] - trend[0]) / trend[0]) * 100;
+  const openHighTickets = acc.tickets.filter(t => t.status === "Open" && t.severity === "High").length;
+  const negativeEmails = acc.emails.filter(e => e.sentiment === "Negative").length;
+  let risk = 0;
+  if (trendDelta < -10) risk += 2;
+  if (openHighTickets > 0) risk += 2;
+  if (negativeEmails > 0) risk += 1;
+  let opportunity = 0;
+  if (trendDelta > 10) opportunity += 2;
+  if (acc.emails.some(e => e.sentiment === "Positive")) opportunity += 1;
+  if (/multi-entity|expansion|new brand|acquisition|additional/i.test(acc.dealNotes)) opportunity += 2;
+  let level = "stable";
+  if (risk >= 3) level = "risk"; else if (opportunity >= 3) level = "opportunity";
+  return { trendDelta, level };
+}
+
+function daysUntil(dateStr) {
+  const target = new Date(dateStr + "T00:00:00");
+  return Math.ceil((target - new Date()) / 86400000);
+}
+
+function urgencyClasses(days) {
+  if (days <= 14) return "text-amber-300 bg-amber-400/10 border-amber-400/30";
+  if (days <= 45) return "text-yellow-200 bg-yellow-400/[0.06] border-yellow-400/20";
+  return "text-slate-400 bg-slate-500/[0.06] border-slate-500/20";
+}
+
+const LEVEL_STYLES = {
+  risk: { dot: "bg-amber-400", text: "text-amber-300", label: "At Risk", ring: "ring-amber-400/30" },
+  opportunity: { dot: "bg-teal-400", text: "text-teal-300", label: "Opportunity", ring: "ring-teal-400/30" },
+  stable: { dot: "bg-slate-400", text: "text-slate-300", label: "Stable", ring: "ring-slate-400/30" }
+};
+
+async function generateBriefing(account, signals) {
+  const context = `
+Account: ${account.name} (${account.industry})
+ARR: $${account.arr.toLocaleString()} | Seats: ${account.seats} | Active users: ${account.activeUsers}
+Stage: ${account.stage} | Renewal: ${account.renewalDate} | Owner: ${account.owner}
+Deal notes: ${account.dealNotes}
+Login trend (14 days, oldest to newest): ${account.loginTrend.join(", ")} (${signals.trendDelta.toFixed(0)}% change)
+
+Support tickets:
+${account.tickets.map(t => `- [${t.severity}, ${t.status}] ${t.subject} (opened ${t.opened})`).join("\n")}
+
+Slack mentions:
+${account.slack.map(s => `- (${s.channel}, ${s.time}) ${s.author}: ${s.message}`).join("\n")}
+
+Emails:
+${account.emails.map(e => `- [${e.sentiment}] "${e.subject}": ${e.snippet}`).join("\n")}
+
+Feature adoption: Cards ${account.usage.featureAdoption.cards}%, Expense ${account.usage.featureAdoption.expense}%, Reimbursement ${account.usage.featureAdoption.reimbursement}%
+`.trim();
+
+  const prompt = `You are a customer success analyst for a B2B fintech (corporate cards & spend management). Given the account data below, produce a JSON object ONLY — no markdown fences, no preamble, no commentary outside the JSON.
+
+Required JSON shape:
+{
+  "summary": "2-3 sentence plain-language summary of the account's current state",
+  "risks": ["short risk statement", "..."],
+  "opportunities": ["short opportunity statement", "..."],
+  "nextBestAction": "one specific, actionable next step for the account owner",
+  "confidence": "high" | "medium" | "low"
+}
+
+Keep each risk/opportunity under 15 words. Base everything strictly on the data provided, do not invent facts.
+
+ACCOUNT DATA:
+${context}`;
+
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${GROQ_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      max_tokens: 1000,
+      response_format: { type: "json_object" }, // asks Groq to guarantee valid JSON back
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || `API error ${res.status}`);
+  const raw = data.choices?.[0]?.message?.content || "";
+  const cleaned = raw.replace(/```json|```/g, "").trim();
+  return JSON.parse(cleaned);
+}
+
+function briefingToText(acc, b) {
+  return [
+    `${acc.name} — Account Briefing`, "", b.summary, "", "Risks:",
+    ...(b.risks?.length ? b.risks.map(r => `- ${r}`) : ["- None identified"]), "",
+    "Opportunities:",
+    ...(b.opportunities?.length ? b.opportunities.map(o => `- ${o}`) : ["- None identified"]), "",
+    `Next Best Action: ${b.nextBestAction}`, `(Confidence: ${b.confidence})`
+  ].join("\n");
+}
+
+function PulseStrip({ trend }) {
+  const max = Math.max(...trend);
+  return (
+    <div className="flex items-end gap-[3px] h-10">
+      {trend.map((v, i) => (
+        <div key={i}
+          className={`w-2 rounded-sm ${i === trend.length - 1 ? "bg-indigo-400" : "bg-slate-600"}`}
+          style={{ height: `${Math.max(8, (v / max) * 100)}%` }}
+          title={`Day ${i + 1}: ${v} active users`} />
+      ))}
+    </div>
+  );
+}
+
+function SourceCard({ emoji, title, count, children }) {
+  return (
+    <div className="bg-[#12181F] border border-[#232B35] rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 text-slate-200">
+          <span className="text-[13px]">{emoji}</span>
+          <span className="text-[13px] font-mono uppercase tracking-wide">{title}</span>
+        </div>
+        <span className="text-[11px] font-mono text-slate-500">{count}</span>
+      </div>
+      <div className="space-y-2.5">{children}</div>
+    </div>
+  );
+}
+
+function Badge({ tone, children }) {
+  const styles = {
+    High: "text-amber-300 bg-amber-400/10 border-amber-400/30",
+    Medium: "text-slate-300 bg-slate-400/10 border-slate-400/30",
+    Low: "text-slate-400 bg-slate-500/10 border-slate-500/30",
+    Positive: "text-teal-300 bg-teal-400/10 border-teal-400/30",
+    Negative: "text-amber-300 bg-amber-400/10 border-amber-400/30",
+    Neutral: "text-slate-400 bg-slate-500/10 border-slate-500/30"
+  };
+  return <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${styles[tone]}`}>{children}</span>;
+}
+
+function StatChip({ label, value, tone }) {
+  const tones = { neutral: "text-slate-200", amber: "text-amber-300", teal: "text-teal-300", indigo: "text-indigo-300" };
+  return (
+    <div className="flex flex-col gap-0.5 px-4 py-2.5 border-r border-[#232B35] last:border-r-0">
+      <span className="text-[10px] font-mono uppercase tracking-wide text-slate-500">{label}</span>
+      <span className={`text-[15px] font-semibold tabular-nums ${tones[tone]}`}>{value}</span>
+    </div>
+  );
+}
+
+function App() {
+  const [selectedId, setSelectedId] = useState(ACCOUNTS[0].id);
+  const [briefings, setBriefings] = useState({});
+  const [loadingId, setLoadingId] = useState(null);
+  const [errorId, setErrorId] = useState(null);
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState("priority");
+  const [copied, setCopied] = useState(false);
+
+  const signalsById = useMemo(() => {
+    const map = {};
+    ACCOUNTS.forEach(a => { map[a.id] = deriveSignals(a); });
+    return map;
+  }, []);
+
+  const portfolio = useMemo(() => {
+    const totalArr = ACCOUNTS.reduce((s, a) => s + a.arr, 0);
+    const arrAtRisk = ACCOUNTS.filter(a => signalsById[a.id].level === "risk").reduce((s, a) => s + a.arr, 0);
+    const expansionPipeline = ACCOUNTS.filter(a => signalsById[a.id].level === "opportunity").reduce((s, a) => s + a.arr, 0);
+    const needsAttention = ACCOUNTS.filter(a => signalsById[a.id].level !== "stable").length;
+    return { totalArr, arrAtRisk, expansionPipeline, needsAttention };
+  }, [signalsById]);
+
+  const filteredAccounts = useMemo(() => {
+    let list = ACCOUNTS.filter(a => a.name.toLowerCase().includes(query.toLowerCase()));
+    const rank = { risk: 0, opportunity: 1, stable: 2 };
+    if (sortBy === "priority") list = [...list].sort((a, b) => rank[signalsById[a.id].level] - rank[signalsById[b.id].level]);
+    if (sortBy === "arr") list = [...list].sort((a, b) => b.arr - a.arr);
+    if (sortBy === "renewal") list = [...list].sort((a, b) => daysUntil(a.renewalDate) - daysUntil(b.renewalDate));
+    return list;
+  }, [query, sortBy, signalsById]);
+
+  const account = ACCOUNTS.find(a => a.id === selectedId) || filteredAccounts[0] || ACCOUNTS[0];
+  const signals = signalsById[account.id];
+  const levelStyle = LEVEL_STYLES[signals.level];
+  const briefing = briefings[account.id];
+  const days = daysUntil(account.renewalDate);
+
+  const runBriefing = async (acc) => {
+    if (GROQ_API_KEY === "PASTE_YOUR_API_KEY_HERE") {
+      setErrorId(acc.id);
+      setErrorMsg('No API key set — edit the GROQ_API_KEY constant near the top of the file.');
+      return;
+    }
+    setLoadingId(acc.id); setErrorId(null); setErrorMsg(null);
+    try {
+      const result = await generateBriefing(acc, deriveSignals(acc));
+      setBriefings(prev => ({ ...prev, [acc.id]: result }));
+    } catch (e) {
+      setErrorId(acc.id); setErrorMsg(e.message || "Something went wrong.");
+    } finally { setLoadingId(null); }
+  };
+
+  const handleCopy = () => {
+    if (!briefing) return;
+    navigator.clipboard?.writeText(briefingToText(account, briefing));
+    setCopied(true); setTimeout(() => setCopied(false), 1800);
+  };
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
+      const idx = filteredAccounts.findIndex(a => a.id === selectedId);
+      if ((e.key === "ArrowDown" || e.key === "j") && idx < filteredAccounts.length - 1) setSelectedId(filteredAccounts[idx + 1].id);
+      else if ((e.key === "ArrowUp" || e.key === "k") && idx > 0) setSelectedId(filteredAccounts[idx - 1].id);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [filteredAccounts, selectedId]);
+
+  return (
+    <div className="min-h-screen bg-[#0B0F14] text-[#E8EDF2] font-sans">
+      <header className="border-b border-[#232B35] px-6 py-4 flex items-center justify-between relative">
+        <div>
+          <div className="text-[11px] font-mono uppercase tracking-widest text-slate-500 mb-0.5">Growth Squad · Internal Tool</div>
+          <h1 className="text-lg font-semibold tracking-tight">Customer Signal Console</h1>
+        </div>
+        <div className={`flex items-center gap-1.5 text-[12px] font-mono px-2.5 py-1.5 rounded-md border ${
+          GROQ_API_KEY === "PASTE_YOUR_API_KEY_HERE" ? "border-amber-400/30 text-amber-300" : "border-teal-400/25 text-teal-300/90"
+        }`}>
+          {GROQ_API_KEY === "PASTE_YOUR_API_KEY_HERE" ? "⚠️ No API key set" : "✨ Live Groq AI"}
+        </div>
+      </header>
+
+      <div className="flex flex-wrap border-b border-[#232B35] bg-[#0D1319]">
+        <StatChip label="Total ARR" value={`$${(portfolio.totalArr / 1000).toFixed(0)}k`} tone="neutral" />
+        <StatChip label="ARR at risk" value={`$${(portfolio.arrAtRisk / 1000).toFixed(0)}k`} tone="amber" />
+        <StatChip label="Expansion pipeline" value={`$${(portfolio.expansionPipeline / 1000).toFixed(0)}k`} tone="teal" />
+        <StatChip label="Needs attention" value={`${portfolio.needsAttention} of ${ACCOUNTS.length}`} tone="indigo" />
+      </div>
+
+      <div className="flex flex-col md:flex-row">
+        <aside className="md:w-72 border-b md:border-b-0 md:border-r border-[#232B35] p-3 flex flex-col gap-2">
+          <div className="flex items-center gap-1.5 bg-[#12181F] border border-[#232B35] rounded-md px-2.5 py-1.5">
+            <span className="text-slate-500 text-[12px]">🔍</span>
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search accounts…"
+              className="bg-transparent outline-none text-[12.5px] text-slate-200 placeholder:text-slate-600 w-full" />
+          </div>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+            className="bg-[#12181F] border border-[#232B35] rounded-md px-2.5 py-1.5 text-[11.5px] font-mono text-slate-400 outline-none">
+            <option value="priority">Sort: Needs attention first</option>
+            <option value="arr">Sort: ARR (high to low)</option>
+            <option value="renewal">Sort: Renewal (soonest)</option>
+          </select>
+          <div className="flex md:flex-col gap-2 overflow-x-auto md:overflow-visible">
+            {filteredAccounts.map(acc => {
+              const s = signalsById[acc.id], style = LEVEL_STYLES[s.level], active = acc.id === selectedId, d = daysUntil(acc.renewalDate);
+              return (
+                <button key={acc.id} onClick={() => setSelectedId(acc.id)}
+                  className={`text-left min-w-[220px] md:min-w-0 rounded-lg border px-3.5 py-3 transition-colors ${active ? "border-indigo-400/50 bg-indigo-400/[0.06]" : "border-[#232B35] bg-[#12181F] hover:border-slate-500/50"}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium truncate">{acc.name}</span>
+                    <span className={`w-2 h-2 rounded-full ${style.dot} shrink-0 ml-2`} />
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-500 flex items-center justify-between">
+                    <span>${(acc.arr / 1000).toFixed(0)}k ARR</span>
+                    <span className={style.text}>{style.label}</span>
+                  </div>
+                  <div className="text-[10.5px] font-mono text-slate-600 mt-1">Renews in {d}d</div>
+                </button>
+              );
+            })}
+          </div>
+          <div className="hidden md:block text-[10.5px] font-mono text-slate-600 mt-auto pt-3">↑ / ↓ to navigate accounts</div>
+        </aside>
+
+        <main className="flex-1 p-6 space-y-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2.5 mb-1">
+                <h2 className="text-2xl font-semibold tracking-tight">{account.name}</h2>
+                <span className={`text-[11px] font-mono px-2 py-0.5 rounded-full border ${levelStyle.ring} ${levelStyle.text} bg-white/[0.02]`}>{levelStyle.label}</span>
+              </div>
+              <div className="text-[13px] text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span>{account.industry} · Owner {account.owner}</span>
+                <span className={`inline-flex items-center gap-1 text-[11px] font-mono px-1.5 py-0.5 rounded border ${urgencyClasses(days)}`}>🕒 Renews in {days}d ({account.renewalDate})</span>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-[11px] font-mono uppercase tracking-wide text-slate-500 mb-1">14-day login pulse</div>
+              <PulseStrip trend={account.loginTrend} />
+            </div>
+          </div>
+
+          <div className="bg-[#12181F] border border-[#232B35] rounded-lg p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <span>✨</span>
+                <span className="text-[13px] font-mono uppercase tracking-wide text-slate-300">AI Briefing</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {briefing && (
+                  <button onClick={handleCopy} className="flex items-center gap-1.5 text-[12px] font-mono text-slate-400 hover:text-slate-200 border border-[#232B35] rounded-md px-2.5 py-1">
+                    {copied ? "✅ Copied" : "📋 Copy"}
+                  </button>
+                )}
+                <button onClick={() => runBriefing(account)} disabled={loadingId === account.id}
+                  className="flex items-center gap-1.5 text-[12px] font-mono text-indigo-300 hover:text-indigo-200 disabled:opacity-50 border border-indigo-400/30 rounded-md px-2.5 py-1">
+                  {loadingId === account.id ? "⏳" : "🔄"} {briefing ? "Regenerate" : "Generate briefing"}
+                </button>
+              </div>
+            </div>
+
+            {loadingId === account.id && <div className="text-sm text-slate-500 font-mono">Analyzing CRM, tickets, Slack, email, and usage data…</div>}
+            {errorId === account.id && !loadingId && <div className="text-sm text-amber-300">⚠️ Couldn't generate a briefing. {errorMsg}</div>}
+            {!briefing && loadingId !== account.id && errorId !== account.id &&
+              <div className="text-sm text-slate-500">Click "Generate briefing" to have AI synthesize this account's summary, risks, opportunities, and next best action.</div>}
+
+            {briefing && (
+              <div className="space-y-4">
+                <p className="text-[14px] text-slate-200 leading-relaxed">{briefing.summary}</p>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-[11px] font-mono uppercase tracking-wide text-amber-400/80 mb-2">⚠️ Risks</div>
+                    <ul className="space-y-1.5">
+                      {(briefing.risks?.length ? briefing.risks : ["None identified"]).map((r, i) => (
+                        <li key={i} className="text-[13px] text-slate-300 flex gap-2"><span className="text-amber-400 mt-1">·</span>{r}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-mono uppercase tracking-wide text-teal-400/80 mb-2">📈 Opportunities</div>
+                    <ul className="space-y-1.5">
+                      {(briefing.opportunities?.length ? briefing.opportunities : ["None identified"]).map((o, i) => (
+                        <li key={i} className="text-[13px] text-slate-300 flex gap-2"><span className="text-teal-400 mt-1">·</span>{o}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 bg-indigo-400/[0.06] border border-indigo-400/25 rounded-md px-3.5 py-3">
+                  <span className="text-indigo-300 mt-0.5">→</span>
+                  <div>
+                    <div className="text-[11px] font-mono uppercase tracking-wide text-indigo-300 mb-0.5">Next Best Action</div>
+                    <div className="text-[13px] text-slate-100">{briefing.nextBestAction}</div>
+                  </div>
+                  <span className="ml-auto text-[10px] font-mono text-slate-500 shrink-0">✓ {briefing.confidence} confidence</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="text-[11px] font-mono uppercase tracking-wide text-slate-500 mb-3">Source Data</div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <SourceCard emoji="🏦" title="CRM (Zoho)" count="1 record">
+                <div className="text-[13px] text-slate-300 space-y-1">
+                  <div className="flex justify-between"><span className="text-slate-500">Stage</span><span>{account.stage}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">ARR</span><span>${account.arr.toLocaleString()}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">Seats used</span><span>{account.activeUsers}/{account.seats}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">Last contact</span><span>{account.lastContact}</span></div>
+                  <div className="pt-1.5 text-slate-400 italic">"{account.dealNotes}"</div>
+                </div>
+              </SourceCard>
+              <SourceCard emoji="🎫" title="Support Tickets" count={`${account.tickets.length} tickets`}>
+                {account.tickets.map(t => (
+                  <div key={t.id} className="flex items-start justify-between gap-2 text-[13px]">
+                    <div className="text-slate-300">{t.subject}<div className="text-[11px] text-slate-500 font-mono">{t.id} · opened {t.opened}</div></div>
+                    <div className="flex flex-col items-end gap-1 shrink-0"><Badge tone={t.severity}>{t.severity}</Badge><span className="text-[10px] font-mono text-slate-500">{t.status}</span></div>
+                  </div>
+                ))}
+              </SourceCard>
+              <SourceCard emoji="💬" title="Slack" count={`${account.slack.length} mentions`}>
+                {account.slack.map((s, i) => (
+                  <div key={i} className="text-[13px]">
+                    <div className="text-[11px] font-mono text-slate-500 mb-0.5">{s.channel} · {s.author} · {s.time}</div>
+                    <div className="text-slate-300">{s.message}</div>
+                  </div>
+                ))}
+              </SourceCard>
+              <SourceCard emoji="✉️" title="Email" count={`${account.emails.length} threads`}>
+                {account.emails.map((e, i) => (
+                  <div key={i} className="text-[13px]">
+                    <div className="flex items-center justify-between mb-0.5"><span className="text-slate-300 font-medium">{e.subject}</span><Badge tone={e.sentiment}>{e.sentiment}</Badge></div>
+                    <div className="text-slate-400 text-[12px]">{e.snippet}</div>
+                  </div>
+                ))}
+              </SourceCard>
+            </div>
+            <div className="mt-4">
+              <SourceCard emoji="👥" title="Product Usage" count={`${account.activeUsers} active users`}>
+                <div className="grid grid-cols-3 gap-4">
+                  {Object.entries(account.usage.featureAdoption).map(([feature, pct]) => (
+                    <div key={feature}>
+                      <div className="text-[11px] font-mono text-slate-500 capitalize mb-1">{feature}</div>
+                      <div className="h-1.5 bg-[#0B0F14] rounded-full overflow-hidden"><div className="h-full bg-indigo-400/70 rounded-full" style={{ width: `${pct}%` }} /></div>
+                      <div className="text-[11px] font-mono text-slate-400 mt-1">{pct}%</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[11px] font-mono text-slate-500 pt-1">🕒 Last login {account.usage.lastLogin}</div>
+              </SourceCard>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
